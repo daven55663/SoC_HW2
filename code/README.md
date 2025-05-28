@@ -94,3 +94,5 @@
 ---
 
 如需進一步擴充中斷處理功能（例如按鈕計數、不同 LED pattern），可延伸 `Intr_Handler()` 內容。此專案適合作為 ZYNQ GPIO 與中斷學習範例。
+## 實作影片
+https://www.youtube.com/shorts/2QIuelzG3dc
