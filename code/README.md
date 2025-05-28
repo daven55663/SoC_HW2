@@ -1,98 +1,121 @@
-# 📘 SoC_HW2：ZYNQ LED 中斷控制設計
+# 📘 SoC_HW2：使用 FPGA GPIO 產生中斷之實作
 
-本專案實作了一個基於 ZYNQ 的 SoC 系統，利用 AXI GPIO 控制 LED 與接收開關輸入，並透過中斷機制觸發特定動作。使用者可於 ZedBoard 上測試按鍵觸發中斷，並觀察 LED 行為變化。
-
----
-
-## 📐 系統架構
-
-本設計透過 ZYNQ Processing System (PS) 搭配 AXI GPIO 實現：
-
-- `axi_gpio_0`：連接 8-bit LED 輸出 (`leds_8bits`)
-- `axi_gpio_1`：連接 8-bit 開關輸入 (`sws_8bits`) 並具中斷輸出 (`ip2intc_irpt`)
-- `ps7_0_axi_periph`：AXI Interconnect 管理 PS 與外設間通訊
-- `rst_ps7_0_50M`：系統重置信號模組
-- PS 端使用 C 程式 (`helloworld.c`) 控制中斷與 GPIO 資料處理
+本專案為 ZYNQ SoC 平台上 HW2 作業，目標為透過 **FPGA GPIO 與外部開關 (SW)** 作為中斷來源，驅動中斷機制並由 Processing System (PS) 處理，實作 GPIO 控制與 LED 顯示。內容包含硬體設計（Vivado）、軟體撰寫（Vitis）、中斷控制與 LED 顯示功能。
 
 ---
 
-## 📂 專案內容
+## ✅ 題目要求對應
+
+| 項目                     | 本專案說明                                 |
+|--------------------------|--------------------------------------------|
+| 使用 FPGA 硬體觸發中斷   | 使用 AXI GPIO 模組（接收 SW）              |
+| 使用外部 SW 作為輸入來源 | 開關連接至 `axi_gpio_1`，觸發中斷          |
+| 使用中斷控制器 (GIC)     | `XScuGic` 控制中斷，處理 IRQ 註冊與清除    |
+| 驅動設計與 SDK 撰寫     | 使用 Vitis 撰寫中斷驅動與 LED 控制邏輯     |
+
+---
+
+## 📐 系統架構 (Vivado Block Design)
+
+- `axi_gpio_1`：
+  - 設為 **All Inputs**
+  - 開啟 **Interrupt Output**
+  - 接收開關 (`sws_8bits`) 並輸出 `ip2intc_irpt` 中斷訊號
+
+- `axi_gpio_0`：
+  - 設為 **All Outputs**
+  - 連接 LED (`leds_8bits`)
+
+- 中斷訊號 `ip2intc_irpt` 連接至 `processing_system7_0.IRQ_F2P[0]`
+
+- 系統搭配 `ps7_0_axi_periph` 與 `rst_ps7_0_50M` 負責 AXI 匯流排與重置信號控制
+
+---
+
+## 🧾 檔案內容
 
 ```plaintext
-├── design_1.vhd         # RTL 匯出之頂層硬體描述 (Block Design 生成)
-├── helloworld.c         # ARM Cortex-A9 上運行的 GPIO 中斷與 LED 控制程式
-├── SOC_HW2.PNG          # Block Design 結構圖
-├── README.md            # 本文件
+├── design_1.vhd         # 匯出之 HDL 頂層（由 Block Design 自動產生）
+├── helloworld.c         # 中斷處理程式與 LED 控制邏輯
+├── SOC_HW2.PNG          # 系統 Block Design 圖
+├── README.md            # 專案說明文件（本檔）
 ```
 
 ---
 
-## ⚙️ 功能描述
+## 🧠 程式邏輯 (helloworld.c)
 
-- ✅ 每 0.5 秒 LED 自動遞增 (模擬流水燈)
-- 🔘 使用 `sws_8bits` 中任一按鈕觸發中斷
-- 🔁 中斷發生時：
-  - 終止 LED 計數、清除顯示
-  - 延遲 2 秒
-  - 繼續正常計數顯示
-- 📟 `UART` 顯示目前 LED 數值與中斷次數
+### 🔁 主流程：
 
----
+- 初始化平台與 GPIO 設定
+- 持續以 0.5 秒速度改變 LED 數值 (`LED_num++`)
+- 顯示 LED 狀態並透過 UART 印出目前值
 
-## 🧠 核心程式說明 (`helloworld.c`)
+### ⚡ 中斷流程：
 
-- 使用 `XGpio` 控制 GPIO 方向與寫入值
-- 使用 `XScuGic` 建立中斷處理機制
-- 定義中斷處理函數 `Intr_Handler()`：
-  - 執行 debounce 延遲
-  - 關閉/清除/重新開啟中斷
-  - 將 LED 歸零，並更新中斷次數
-- 主迴圈以 `LED_num++` 控制 LED 流水燈效果
+當開關觸發中斷時：
 
----
-
-## 🛠️ 使用方式
-
-### 1️⃣ 硬體設定
-
-1. 在 Vivado 匯出 Block Design 並產生 HDL Wrapper
-2. 使用 `design_1.vhd` 實作 FPGA 邏輯
-3. 使用 ZYNQ Boot 方式載入程式
-
-### 2️⃣ 軟體編譯
-
-於 Vitis 開發環境中：
-
-- 新增 Platform Project 並匯入硬體描述
-- 建立 Application Project，選擇 `helloworld.c` 作為應用程式
-- 建立與燒錄程式 (`Run As → Launch on Hardware`)
+1. `axi_gpio_1` 的 `ip2intc_irpt` 啟動 IRQ
+2. PS 中的 `GIC` 呼叫 `Intr_Handler()` 函式
+3. 中斷服務函式中：
+   - 延遲防彈跳
+   - 關閉與清除中斷旗標
+   - 清除 LED 顯示並等待 2 秒
+   - 再次啟用中斷
+   - 中斷次數加一並顯示於 UART
 
 ---
 
-## 💡 補充說明
+## ⚙️ 軟體設計細節
 
-- GPIO 中斷透過 `ip2intc_irpt` 連接至 PS 的 IRQ，並由 GIC 處理
-- `XGpio_SetDataDirection` 控制通道方向（1 為輸入，0 為輸出）
-- 使用 `XGpio_DiscreteWrite()` 寫入 LED 狀態
+### 初始化設定
+
+```c
+XGpio_Initialize(&LED, LED_ID);
+XGpio_SetDataDirection(&LED, 1, 0);  // CH1 為輸出
+
+XGpio_Initialize(&BTN, BTN_ID);
+XGpio_SetDataDirection(&BTN, 1, 1);  // CH1 為輸入
+```
+
+### 中斷註冊與啟用
+
+```c
+XScuGic_Connect(&INTCInst, INTC_GPIO_ID, (Xil_ExceptionHandler)Intr_Handler, &BTN);
+XScuGic_Enable(&INTCInst, INTC_GPIO_ID);
+
+XGpio_InterruptGlobalEnable(&BTN);
+XGpio_InterruptEnable(&BTN, BTN_INT);
+```
 
 ---
 
-## 🧾 參考定義（來自 `xparameters.h`）
+## 🧪 測試方法
 
-| 名稱             | 說明                         |
-|------------------|------------------------------|
-| `XPAR_AXI_GPIO_0_DEVICE_ID` | LED 輸出 GPIO |
-| `XPAR_AXI_GPIO_1_DEVICE_ID` | 開關輸入 GPIO |
-| `XPAR_FABRIC_AXI_GPIO_1_IP2INTC_IRPT_INTR` | 中斷來源 |
+1. 將設計下載至 ZedBoard
+2. 將開關 (SW) 接至 AXI GPIO 輸入
+3. 啟動程式後，觀察：
+   - LED 以每 0.5 秒遞增
+   - 按下任一開關會觸發中斷
+   - 中斷時 LED 關閉 2 秒，再繼續跑
+   - UART 印出中斷次數與 LED 值
 
 ---
 
-## 📸 系統架構圖
+## 📸 Block Design 圖
 
 ![SOC Block Design](SOC_HW2.PNG)
 
 ---
 
-如需進一步擴充中斷處理功能（例如按鈕計數、不同 LED pattern），可延伸 `Intr_Handler()` 內容。此專案適合作為 ZYNQ GPIO 與中斷學習範例。
-## 實作影片
-https://www.youtube.com/shorts/2QIuelzG3dc
+## 📚 補充說明
+
+- 所有中斷透過 `IRQ_F2P` 接腳從 PL 傳入 PS
+- `XGpio` 來自 Xilinx 提供的硬體抽象層（HAL）
+- `XScuGic` 控制通用中斷控制器（GIC）
+- 使用 `Xil_ExceptionRegisterHandler()` 註冊中斷機制
+- 可從 `xparameters.h` 取得 IRQ 對應 ID
+
+---
+
+
